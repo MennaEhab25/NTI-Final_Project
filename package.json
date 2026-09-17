@@ -1,0 +1,19 @@
+{
+  "name": "freelancehub-person4",
+  "private": true,
+  "version": "1.0.0",
+  "workspaces": [
+    "backend",
+    "frontend"
+  ],
+  "scripts": {
+    "start:backend": "npm run dev -w backend",
+    "start:frontend": "npm start -w frontend",
+    "build": "npm run build -w frontend",
+    "test": "node --test backend/tests/*.test.js",
+    "demo": "node backend/src/demo/server.js"
+  },
+  "engines": {
+    "node": "^22.12.0 || ^24.0.0"
+  }
+}
