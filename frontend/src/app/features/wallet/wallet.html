@@ -1,1 +1,73 @@
-<p>wallet works!</p>
+<div class="page">
+  <header>
+    <div>
+      <h1>Wallet & Payments</h1>
+      <p>Simple Fawry checkout + freelancer wallet.</p>
+    </div>
+    <a href="/admin">Admin</a>
+  </header>
+
+  <section class="card demo-id">
+    <label>Freelancer ID used until Auth is connected</label>
+    <div class="row">
+      <input [(ngModel)]="userId" />
+      <button class="secondary" (click)="saveUser()">Use ID</button>
+    </div>
+  </section>
+
+  <section class="stats">
+    <div class="card"><span>Balance</span><strong>{{ summary.balance | number:'1.2-2' }} EGP</strong></div>
+    <div class="card"><span>Reserved</span><strong>{{ summary.reserved | number:'1.2-2' }} EGP</strong></div>
+    <div class="card"><span>Available</span><strong>{{ summary.available | number:'1.2-2' }} EGP</strong></div>
+  </section>
+
+  <section class="grid">
+    <form class="card" (ngSubmit)="pay()">
+      <h2>Test real Fawry checkout</h2>
+      <p class="hint">Fawry shows the payment methods enabled on your merchant account: card, Fawry reference and mobile wallet.</p>
+
+      <label>Client ID</label><input name="clientId" [(ngModel)]="checkout.clientId" required />
+      <label>Contract ID</label><input name="contractId" [(ngModel)]="checkout.contractId" required />
+      <label>Amount</label><input name="amount" type="number" min="1" [(ngModel)]="checkout.amount" required />
+      <label>Customer name</label><input name="name" [(ngModel)]="checkout.customerName" required />
+      <label>Email</label><input name="email" type="email" [(ngModel)]="checkout.customerEmail" required />
+      <label>Mobile</label><input name="mobile" [(ngModel)]="checkout.customerMobile" required />
+
+      <button type="submit" [disabled]="loading">{{ loading ? 'Starting...' : 'Pay with Fawry' }}</button>
+    </form>
+
+    <form class="card" (ngSubmit)="requestWithdrawal()">
+      <h2>Request withdrawal</h2>
+      <label>Amount</label><input name="withdrawAmount" type="number" min="1" [(ngModel)]="withdrawal.amount" required />
+      <label>Method</label>
+      <select name="withdrawMethod" [(ngModel)]="withdrawal.method">
+        <option value="MOBILE_WALLET">Mobile wallet</option>
+        <option value="BANK">Bank</option>
+      </select>
+      <label>Wallet number / bank details</label><input name="account" [(ngModel)]="withdrawal.accountDetails" required />
+      <button type="submit">Send request</button>
+
+      <h3>My requests</h3>
+      @if (!withdrawals.length) { <p class="hint">No withdrawal requests yet.</p> }
+      @for (item of withdrawals; track item._id) {
+        <div class="list-row">
+          <span>{{ item.amount | number:'1.2-2' }} EGP</span>
+          <span class="badge">{{ item.status }}</span>
+        </div>
+      }
+    </form>
+  </section>
+
+  @if (message) { <p class="message">{{ message }}</p> }
+
+  <section class="card">
+    <h2>Wallet transactions</h2>
+    @if (!transactions.length) { <p class="hint">Transactions appear after a payment is released or a withdrawal is approved.</p> }
+    @for (item of transactions; track item._id) {
+      <div class="list-row">
+        <div><strong>{{ item.reason }}</strong><small>{{ item.createdAt | date:'medium' }}</small></div>
+        <strong [class.debit]="item.type === 'DEBIT'">{{ item.type === 'CREDIT' ? '+' : '-' }}{{ item.amount | number:'1.2-2' }} EGP</strong>
+      </div>
+    }
+  </section>
+</div>
