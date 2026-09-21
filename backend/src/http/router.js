@@ -14,6 +14,8 @@ import { freelancers } from '../modules/users/user.controller.js';
 import chatRoutes from '../modules/chat/chat.routes.js';
 import notificationRoutes from '../modules/notifications/notification.routes.js';
 const router = Router();
+import deliveryRoutes from '../modules/deliveries/delivery.routes.js';
+import auditRoutes from '../modules/audit/audit.routes.js';
 
 // Person 1
 router.use('/auth', authRoutes);
@@ -29,7 +31,9 @@ router.use('/extensions', extensionRoutes);
 
 //person3
 router.use('/chat', chatRoutes);
-router.use('/notifications', notificationRoutes);
+router.use('/notifications',notificationRoutes);
+app.use('/api', deliveryRoutes);
+app.use('/api', auditRoutes);
 
 // Person 4
 router.use('/payments', paymentRoutes);
