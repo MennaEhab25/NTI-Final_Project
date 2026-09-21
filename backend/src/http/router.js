@@ -12,7 +12,7 @@ import withdrawalRoutes from '../modules/withdrawals/withdrawal.routes.js';
 import adminRoutes from '../modules/admin/admin.routes.js';
 import { freelancers } from '../modules/users/user.controller.js';
 import chatRoutes from '../modules/chat/chat.routes.js';
-
+import notificationRoutes from '../modules/notifications/notification.routes.js';
 const router = Router();
 
 // Person 1
@@ -29,6 +29,7 @@ router.use('/extensions', extensionRoutes);
 
 //person3
 router.use('/chat', chatRoutes);
+router.use('/notifications', notificationRoutes);
 
 // Person 4
 router.use('/payments', paymentRoutes);

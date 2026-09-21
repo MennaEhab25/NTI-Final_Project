@@ -2,15 +2,20 @@ import * as service from './chat.service.js';
 
 export default function registerChatSocket(io) {
   io.on('connection', (socket) => {
-    socket.on('join', (contractId) => {
-      socket.join(`contract:${contractId}`);
+    socket.on('join', async (contractId) => {
+      try {
+        await service.assertParticipant(contractId, socket.userId);
+        socket.join(`contract:${contractId}`);
+      } catch {
+        socket.emit('message:error', { message: 'Cannot join this chat' });
+      }
     });
 
-    socket.on('message:send', async ({ contractId, senderId, content }) => {
+    socket.on('message:send', async ({ contractId, content }) => {
       try {
-        const msg = await service.add({ contractId, senderId, content });
+        const msg = await service.add({ contractId, senderId: socket.userId, content });
         io.to(`contract:${contractId}`).emit('message:new', msg);
-      } catch (err) {
+      } catch {
         socket.emit('message:error', { message: 'Could not send message' });
       }
     });

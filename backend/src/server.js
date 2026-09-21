@@ -4,6 +4,9 @@ import app from './app.js';
 import env from './config/env.config.js';
 import { connectDatabase } from './config/db.config.js';
 import registerChatSocket from './modules/chat/chat.socket.js';
+import { setIO } from './utils/socket.js';
+import registerNotificationSocket from './modules/notifications/notification.socket.js';
+import socketAuth from './middleware/socketAuth.middleware.js';
 
 const server = http.createServer(app);
 
@@ -12,6 +15,17 @@ const io = new Server(server, {
 });
 
 registerChatSocket(io);
+
+setIO(io);
+registerNotificationSocket(io);
+
+
+socketAuth(io);
+registerChatSocket(io);
+setIO(io);
+registerNotificationSocket(io);
+
+
 
 connectDatabase()
   .then(() =>
