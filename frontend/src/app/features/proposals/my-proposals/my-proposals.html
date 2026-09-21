@@ -1,1 +1,1 @@
-<p>my-proposals works!</p>
+<section class="page"><h1>My Proposals</h1><input [(ngModel)]="userId" placeholder="Temporary freelancer id"><button (click)="load()">Load</button><div class="card" *ngFor="let p of proposals"><b>{{p.price}} EGP</b> · {{p.duration}} days · {{p.status}}<p>{{p.coverLetter}}</p><button *ngIf="p.status !== 'ACCEPTED' && p.status !== 'WITHDRAWN'" (click)="withdraw(p._id)">Withdraw</button></div></section>

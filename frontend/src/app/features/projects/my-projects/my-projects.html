@@ -1,1 +1,2 @@
-<p>my-projects works!</p>
+<section class="page"><h1>My Projects</h1><input [(ngModel)]="userId" placeholder="Temporary user id"/><button (click)="load()">Load</button>
+<div class="card" *ngFor="let p of projects"><h3>{{p.title}}</h3><p>{{p.status}} · {{p.proposalsCount}} proposals</p><a [routerLink]="['/projects',p._id]">Open</a></div></section>

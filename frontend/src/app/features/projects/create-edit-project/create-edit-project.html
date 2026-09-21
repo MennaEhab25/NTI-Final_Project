@@ -1,1 +1,8 @@
-<p>create-edit-project works!</p>
+<section class="page"><h1>Create Project</h1>
+<label>Temporary User ID</label><input [(ngModel)]="userId" />
+<label>Title</label><input [(ngModel)]="form.title" />
+<label>Description</label><textarea [(ngModel)]="form.description"></textarea>
+<label>Category</label><input [(ngModel)]="form.category" />
+<label>Budget</label><input type="number" [(ngModel)]="form.budget" />
+<label>Duration (days)</label><input type="number" [(ngModel)]="form.duration" />
+<button (click)="submit()">Create</button><p>{{ message }}</p></section>

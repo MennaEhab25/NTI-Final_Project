@@ -1,1 +1,1 @@
-<p>freelancer-directory works!</p>
+<section class="page"><h1>Freelancer Directory</h1><input [(ngModel)]="search" placeholder="Search freelancers"><button (click)="load()">Search</button><p>{{message}}</p><div class="card" *ngFor="let f of freelancers"><h3>{{f.name}}</h3><p>{{f.title || f.bio}}</p><p>Rating: {{f.ratingAverage || 0}}</p></div></section>

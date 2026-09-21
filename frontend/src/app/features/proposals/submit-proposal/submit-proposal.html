@@ -1,1 +1,1 @@
-<p>submit-proposal works!</p>
+<section class="page"><h1>Submit Proposal</h1><label>Temporary Freelancer ID</label><input [(ngModel)]="userId"><label>Price</label><input type="number" [(ngModel)]="form.price"><label>Duration (days)</label><input type="number" [(ngModel)]="form.duration"><label>Cover letter</label><textarea [(ngModel)]="form.coverLetter"></textarea><button (click)="submit()">Submit</button><p>{{message}}</p></section>

@@ -1,1 +1,1 @@
-<p>project-details works!</p>
+<section class="page" *ngIf="project"><h1>{{project.title}}</h1><p>{{project.description}}</p><p><b>Category:</b> {{project.category}}</p><p><b>Budget:</b> {{project.budget}} EGP</p><p><b>Duration:</b> {{project.duration}} days</p><p><b>Status:</b> {{project.status}}</p><a [routerLink]="['/projects',project._id,'proposal']">Submit proposal</a> · <a [routerLink]="['/projects',project._id,'proposals']">Compare proposals</a></section>

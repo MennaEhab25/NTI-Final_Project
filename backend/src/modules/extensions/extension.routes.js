@@ -1,1 +1,7 @@
-// SCAFFOLD ONLY | Owner: Person 2. Implement here; not imported by the demo.
+import { Router } from 'express';
+import { approve, reject } from './extension.controller.js';
+
+const router = Router();
+router.post('/:id/approve', approve);
+router.post('/:id/reject', reject);
+export default router;

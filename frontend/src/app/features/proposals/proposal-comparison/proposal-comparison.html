@@ -1,1 +1,1 @@
-<p>proposal-comparison works!</p>
+<section class="page"><h1>Proposal Comparison</h1><input [(ngModel)]="userId" placeholder="Temporary client id"><div class="card" *ngFor="let p of proposals"><h3>{{p.price}} EGP · {{p.duration}} days</h3><p>{{p.coverLetter}}</p><b>{{p.status}}</b><div class="actions"><button (click)="action(p._id,'shortlist')">Shortlist</button><button (click)="action(p._id,'accept')">Accept</button><button (click)="action(p._id,'reject')">Reject</button></div></div></section>
