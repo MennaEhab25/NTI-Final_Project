@@ -1,1 +1,3 @@
-// SCAFFOLD ONLY | TODO: Wrap asynchronous request handlers and forward failures to error middleware.
+export const catchAsync = (handler) => (req, res, next) => {
+  Promise.resolve(handler(req, res, next)).catch(next);
+};
