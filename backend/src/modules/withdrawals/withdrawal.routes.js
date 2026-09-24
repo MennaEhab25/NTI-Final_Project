@@ -1,0 +1,10 @@
+import { Router } from 'express';
+import { protect } from '../../middleware/auth.middleware.js';
+import { validate } from '../../middleware/validate.middleware.js';
+import { myWithdrawals, requestWithdrawal } from './withdrawal.controller.js';
+import { createWithdrawalSchema } from './withdrawal.validation.js';
+const router = Router();
+router.use(protect);
+router.post('/', validate(createWithdrawalSchema), requestWithdrawal);
+router.get('/', myWithdrawals);
+export default router;
