@@ -4,19 +4,67 @@ import WalletTransaction from '../wallet/walletTransaction.model.js';
 import { getWalletSummary } from '../wallet/wallet.service.js';
 import { AppError } from '../../utils/errors.js';
 
-export async function createWithdrawal(data) {
-  const wallet = await getWalletSummary(data.freelancerId);
+async function reserveWithdrawalSlot({ freelancerId, amount, method, accountDetails }) {
+  const wallet = await getWalletSummary(freelancerId);
 
-  if (data.amount > wallet.available) {
+  const settledBalance = wallet.balance - wallet.reserved;
+  if (amount > settledBalance) {
     throw new AppError('Insufficient available balance', 400);
   }
 
-  return Withdrawal.create({
+  let created;
+  try {
+    created = await Withdrawal.create({ freelancerId, amount, method, accountDetails });
+  } catch (error) {
+    if (error?.code !== 11000) throw error;
+    created = null;
+  }
+
+  if (created) return created;
+
+  const confirmed = await getWalletSummary(freelancerId);
+  const pending = await Withdrawal.findOne({ freelancerId, status: 'PENDING' }).lean();
+  if (!pending || amount <= pending.amount) {
+    throw new AppError('You already have a pending withdrawal request', 400);
+  }
+  if (amount > confirmed.balance - confirmed.reserved) {
+    throw new AppError('Insufficient available balance', 400);
+  }
+
+  return Withdrawal.findOneAndUpdate(
+    { freelancerId, status: 'PENDING', amount: pending.amount },
+    [
+      {
+        $set: {
+          amount: {
+            $cond: [
+              { $lte: [{ $add: ['$amount', amount - confirmed.reserved] }, confirmed.balance] },
+              amount,
+              '$amount',
+            ],
+          },
+        },
+      },
+    ],
+    { new: true, updatePipeline: true },
+  );
+}
+
+export async function createWithdrawal(data) {
+  const reservation = await reserveWithdrawalSlot({
     freelancerId: data.freelancerId,
     amount: data.amount,
     method: data.method,
     accountDetails: data.accountDetails,
   });
+
+  if (reservation) return reservation;
+
+  const pending = await Withdrawal.findOne({ freelancerId: data.freelancerId, status: 'PENDING' }).lean();
+  if (pending) {
+    throw new AppError('You already have a pending withdrawal request', 400);
+  }
+  throw new AppError('Insufficient available balance', 400);
 }
 
 export async function listWithdrawals(freelancerId) {
@@ -32,7 +80,6 @@ export async function approveWithdrawal(id) {
       const withdrawal = await Withdrawal.findById(id).session(session);
       if (!withdrawal) throw new AppError('Withdrawal request not found', 404);
 
-      // Safe retry from the admin UI.
       if (withdrawal.status === 'APPROVED') {
         approvedWithdrawal = withdrawal;
         return;
