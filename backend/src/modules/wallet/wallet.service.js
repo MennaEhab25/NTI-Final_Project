@@ -24,7 +24,7 @@ export async function getWalletSummary(userId, session = null) {
   return {
     balance: Number(balance.toFixed(2)),
     reserved: Number(reserved.toFixed(2)),
-    available: Number(Math.max(0, balance - reserved).toFixed(2)),
+    available: Number((balance - reserved).toFixed(2)),
   };
 }
 
