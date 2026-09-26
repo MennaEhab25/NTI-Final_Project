@@ -1,4 +1,4 @@
-import { createCheckout, getContractPayment, getPayment, handlePaymobWebhook, releasePayment } from './payment.service.js';
+import { createCheckout, getContractPayment, getMyPayments, getPayment, handlePaymobWebhook, releasePayment } from './payment.service.js';
 import { catchAsync } from '../../utils/catchAsync.js';
 import { successResponse } from '../../utils/apiResponse.js';
 import { AppError } from '../../utils/errors.js';
@@ -23,6 +23,10 @@ export const findPayment = catchAsync(async (req, res) => {
 
 export const byContract = catchAsync(async (req, res) => {
   successResponse(res, 200, await getContractPayment(req.params.contractId, req.userId));
+});
+
+export const mine = catchAsync(async (req, res) => {
+  successResponse(res, 200, await getMyPayments(req.userId));
 });
 
 export const release = catchAsync(async (req, res) => {

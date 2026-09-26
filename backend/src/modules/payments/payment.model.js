@@ -24,6 +24,7 @@ const paymentSchema = new mongoose.Schema({
   },
   providerStatus: { type: String, default: 'NEW' },
   statusHistory: { type: [statusHistorySchema], default: [] },
+  checkoutReservationMarker: { type: Boolean, default: false },
 }, { timestamps: true });
 
 paymentSchema.index({ contractId: 1 }, { unique: true });

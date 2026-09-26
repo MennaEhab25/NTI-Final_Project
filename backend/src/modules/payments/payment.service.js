@@ -3,31 +3,87 @@ import mongoose from 'mongoose';
 import Payment from './payment.model.js';
 import Contract from '../contracts/contract.model.js';
 import Project from '../projects/project.model.js';
-import WalletTransaction from '../wallet/walletTransaction.model.js';
-import Delivery from '../deliveries/delivery.model.js';
+import User from '../users/user.model.js';
 import { AppError } from '../../utils/errors.js';
+import env from '../../config/env.config.js';
+import { releasePaymentInSession } from './payment-settlement.service.js';
 
 function paymobConfig() {
-  const baseUrl = (process.env.PAYMOB_BASE_URL || 'https://accept.paymob.com').replace(/\/$/, '');
-  const secretKey = process.env.PAYMOB_SECRET_KEY;
-  const publicKey = process.env.PAYMOB_PUBLIC_KEY;
-  const hmacSecret = process.env.PAYMOB_HMAC_SECRET;
-  const cardIntegrationId = Number(process.env.PAYMOB_CARD_INTEGRATION_ID);
-  const returnUrl = process.env.PAYMOB_RETURN_URL || 'http://localhost:4200/wallet';
-  const webhookUrl = process.env.PAYMOB_WEBHOOK_URL || '';
+  const missing = [];
+  if (!env.PAYMOB_SECRET_KEY) missing.push('PAYMOB_SECRET_KEY');
+  if (!env.PAYMOB_PUBLIC_KEY) missing.push('PAYMOB_PUBLIC_KEY');
+  if (!env.PAYMOB_HMAC_SECRET) missing.push('PAYMOB_HMAC_SECRET');
+  if (!Number.isInteger(env.PAYMOB_CARD_INTEGRATION_ID)) missing.push('PAYMOB_CARD_INTEGRATION_ID');
+  if (!env.PAYMOB_WEBHOOK_URL) missing.push('PAYMOB_WEBHOOK_URL');
 
-  if (!secretKey || !publicKey || !hmacSecret || !Number.isInteger(cardIntegrationId) || !webhookUrl) {
-    throw new AppError(
-      'Paymob settings are missing in backend/.env (SECRET_KEY, PUBLIC_KEY, HMAC_SECRET, CARD_INTEGRATION_ID, WEBHOOK_URL)',
-      500,
-    );
+  if (missing.length) {
+    throw new AppError(`Paymob payments are not configured. Set ${missing.join(', ')} in backend/.env.`, 503);
   }
 
-  return { baseUrl, secretKey, publicKey, hmacSecret, cardIntegrationId, returnUrl, webhookUrl };
+  return {
+    baseUrl: env.PAYMOB_BASE_URL,
+    secretKey: env.PAYMOB_SECRET_KEY,
+    publicKey: env.PAYMOB_PUBLIC_KEY,
+    hmacSecret: env.PAYMOB_HMAC_SECRET,
+    cardIntegrationId: env.PAYMOB_CARD_INTEGRATION_ID,
+    returnUrl: env.PAYMOB_RETURN_URL,
+    webhookUrl: env.PAYMOB_WEBHOOK_URL,
+  };
+}
+
+const CHECKOUT_RESERVATION_TTL_MS = 15 * 60 * 1000;
+
+function abandonedReservationCutoff() {
+  return new Date(Date.now() - CHECKOUT_RESERVATION_TTL_MS);
 }
 
 function createReference(contractId) {
   return `contract-${contractId}-${Date.now()}`;
+}
+
+async function reserveCheckoutIntention(contract, clientId) {
+  const staleBefore = abandonedReservationCutoff();
+  const reservationFields = {
+    clientId,
+    freelancerId: contract.freelancerId,
+    amount: Number(contract.amount),
+    currency: 'EGP',
+    provider: 'PAYMOB',
+    paymentMethod: '',
+    status: 'INITIATED',
+    providerStatus: 'RESERVING',
+    checkoutReservationMarker: true,
+    paymobIntentionId: '',
+    paymobOrderId: '',
+    paymobTransactionId: '',
+  };
+
+  try {
+    return await Payment.create({
+      ...reservationFields,
+      contractId: contract._id,
+      merchantRefNumber: createReference(contract._id),
+    });
+  } catch (error) {
+    if (error?.code !== 11000) throw error;
+  }
+
+  const unpublished = { $in: ['', null] };
+  return Payment.findOneAndUpdate(
+    {
+      contractId: contract._id,
+      status: { $nin: ['HELD', 'RELEASED'] },
+      $or: [
+        { providerStatus: 'NEW', paymobIntentionId: unpublished },
+        {
+          updatedAt: { $lte: staleBefore },
+          paymobIntentionId: unpublished,
+        },
+      ],
+    },
+    { $set: reservationFields },
+    { new: true },
+  );
 }
 
 function splitName(name) {
@@ -97,7 +153,7 @@ async function callPaymobIntention(payload, config) {
   }
 
   const text = await response.text();
-  let data = {};
+  let data;
   try {
     data = text ? JSON.parse(text) : {};
   } catch {
@@ -119,7 +175,6 @@ async function callPaymobIntention(payload, config) {
 function checkoutUpdate({ reference, contract, amount, intention }) {
   return {
     $set: {
-      merchantRefNumber: reference,
       provider: 'PAYMOB',
       paymobIntentionId: String(intention.id),
       paymobOrderId: String(intention.intention_order_id),
@@ -131,6 +186,8 @@ function checkoutUpdate({ reference, contract, amount, intention }) {
       paymentMethod: '',
       status: 'INITIATED',
       providerStatus: intention.status || 'intended',
+      checkoutReservationMarker: false,
+      ...(reference ? { merchantRefNumber: reference } : {}),
     },
     $push: { statusHistory: { status: 'INITIATED' } },
   };
@@ -142,15 +199,20 @@ export async function createCheckout(clientId, data) {
   if (String(contract.clientId) !== String(clientId)) {
     throw new AppError('Only the contract client can pay', 403);
   }
-  if (contract.status !== 'AWAITING_PAYMENT') {
-    throw new AppError('This contract is not waiting for payment', 400);
+  if (contract.status !== 'AWAITING_PAYMENT'
+    || !contract.clientApproval?.approved
+    || !contract.freelancerApproval?.approved) {
+    throw new AppError('This contract is not ready for funding', 400);
   }
 
-  const alreadyPaid = await Payment.exists({
+  const existingPaidPayment = await Payment.findOne({
     contractId: contract._id,
     status: { $in: ['HELD', 'RELEASED'] },
-  });
-  if (alreadyPaid) throw new AppError('This contract is already paid', 400);
+  }).lean();
+  if (existingPaidPayment) throw new AppError('This contract is already paid', 400);
+
+  const payer = await User.findById(clientId).select('name email').lean();
+  if (!payer) throw new AppError('Client account not found', 404);
 
   const config = paymobConfig();
   const amount = Number(contract.amount);
@@ -158,10 +220,18 @@ export async function createCheckout(clientId, data) {
     throw new AppError('Contract amount is invalid', 400);
   }
 
+  const reservation = await reserveCheckoutIntention(contract, clientId);
+  if (!reservation) {
+    const existing = await Payment.findOne({ contractId: contract._id }).lean();
+    if (existing && ['HELD', 'RELEASED'].includes(existing.status)) {
+      throw new AppError('This contract is already paid', 400);
+    }
+    throw new AppError('A checkout is already in progress for this contract. Please try again.', 409);
+  }
+
   const amountCents = toCents(amount);
   const reference = createReference(contract._id);
-  const { firstName, lastName } = splitName(data.customerName);
-
+  const { firstName, lastName } = splitName(payer.name);
   const intentionPayload = {
     amount: amountCents,
     currency: 'EGP',
@@ -181,16 +251,12 @@ export async function createCheckout(clientId, data) {
       phone_number: data.customerMobile,
       city: 'Cairo',
       country: 'EG',
-      email: data.customerEmail,
+      email: payer.email,
       floor: 'NA',
       state: 'Cairo',
       postal_code: 'NA',
     },
-    customer: {
-      first_name: firstName,
-      last_name: lastName,
-      email: data.customerEmail,
-    },
+    customer: { first_name: firstName, last_name: lastName, email: payer.email },
     extras: { contractId: String(contract._id) },
     special_reference: reference,
     expiration: 3600,
@@ -198,42 +264,51 @@ export async function createCheckout(clientId, data) {
     notification_url: config.webhookUrl,
   };
 
-  const intention = await callPaymobIntention(intentionPayload, config);
-
-  let payment;
-  const filter = {
-    contractId: contract._id,
-    status: { $nin: ['HELD', 'RELEASED'] },
-  };
-  const update = checkoutUpdate({ reference, contract, amount, intention });
-
+  let intention;
   try {
-    payment = await Payment.findOneAndUpdate(filter, update, {
-      new: true,
-      upsert: true,
-      runValidators: true,
-      setDefaultsOnInsert: true,
-    });
+    intention = await callPaymobIntention(intentionPayload, config);
   } catch (error) {
-    if (error?.code !== 11000) throw error;
+    await Payment.findOneAndUpdate(
+      {
+        _id: reservation._id,
+        status: 'INITIATED',
+        providerStatus: 'RESERVING',
+        checkoutReservationMarker: true,
+        paymobIntentionId: { $in: ['', null] },
+      },
+      {
+        $set: {
+          providerStatus: 'NEW',
+          checkoutReservationMarker: false,
+        },
+      },
+      { new: true },
+    );
 
-    const current = await Payment.findOne({ contractId: contract._id });
+    throw error;
+  }
+
+  const payment = await Payment.findOneAndUpdate(
+    {
+      _id: reservation._id,
+      status: 'INITIATED',
+      checkoutReservationMarker: true,
+      providerStatus: 'RESERVING',
+      paymobIntentionId: { $in: ['', null] },
+    },
+    checkoutUpdate({ reference: reservation.merchantRefNumber, contract, amount, intention }),
+    { new: true, runValidators: true },
+  );
+
+  if (!payment) {
+    const current = await Payment.findOne({ contractId: contract._id }).lean();
     if (current && ['HELD', 'RELEASED'].includes(current.status)) {
       throw new AppError('This contract is already paid', 400);
     }
-
-    payment = await Payment.findOneAndUpdate(filter, update, {
-      new: true,
-      runValidators: true,
-    });
-
-    if (!payment) {
-      throw new AppError('A payment checkout is already being processed. Please try again.', 409);
-    }
+    throw new AppError('A checkout is already in progress for this contract. Please try again.', 409);
   }
 
-  const checkoutUrl =
-    `${config.baseUrl}/unifiedcheckout/`
+  const checkoutUrl = `${config.baseUrl}/unifiedcheckout/`
     + `?publicKey=${encodeURIComponent(config.publicKey)}`
     + `&clientSecret=${encodeURIComponent(intention.client_secret)}`;
 
@@ -248,26 +323,25 @@ export async function createCheckout(clientId, data) {
 export async function handlePaymobWebhook(body, receivedHmac) {
   const config = paymobConfig();
   const obj = body?.obj;
-
   if (!obj || !verifyPaymobTransactionHmac(obj, receivedHmac, config.hmacSecret)) {
     throw new AppError('Invalid Paymob webhook HMAC', 401);
   }
 
   const orderId = String(obj.order?.id || '');
   const merchantReference = String(obj.order?.merchant_order_id || '');
-  const lookup = [];
-  if (orderId) lookup.push({ paymobOrderId: orderId });
-  if (merchantReference) lookup.push({ merchantRefNumber: merchantReference });
-  if (!lookup.length) throw new AppError('Paymob callback has no usable order reference', 400);
-
-  const payment = await Payment.findOne({ $or: lookup });
-  if (!payment) throw new AppError('Payment not found for Paymob callback', 404);
-
-  const expectedAmountCents = toCents(payment.amount);
-  if (Number(obj.amount_cents) !== expectedAmountCents || String(obj.currency) !== payment.currency) {
-    throw new AppError('Paymob callback amount or currency does not match the payment', 400);
+  if (!orderId && !merchantReference) {
+    throw new AppError('Paymob callback has no usable order reference', 400);
   }
 
+  let payment = orderId ? await Payment.findOne({ paymobOrderId: orderId }) : null;
+  if (!payment && merchantReference) {
+    payment = await Payment.findOne({ merchantRefNumber: merchantReference });
+  }
+  if (!payment) throw new AppError('Payment not found for Paymob callback', 404);
+
+  if (Number(obj.amount_cents) !== toCents(payment.amount) || String(obj.currency) !== payment.currency) {
+    throw new AppError('Paymob callback amount or currency does not match the payment', 400);
+  }
   if (Number(obj.integration_id) !== config.cardIntegrationId) {
     throw new AppError('Paymob callback integration does not match this project configuration', 400);
   }
@@ -275,8 +349,7 @@ export async function handlePaymobWebhook(body, receivedHmac) {
   payment.provider = 'PAYMOB';
   payment.paymobTransactionId = String(obj.id || payment.paymobTransactionId || '');
   payment.paymobOrderId = orderId || payment.paymobOrderId;
-  payment.paymentMethod =
-    [obj.source_data?.type, obj.source_data?.sub_type].filter(Boolean).join(' / ')
+  payment.paymentMethod = [obj.source_data?.type, obj.source_data?.sub_type].filter(Boolean).join(' / ')
     || payment.paymentMethod;
 
   if (obj.is_refunded === true) {
@@ -308,16 +381,44 @@ export async function handlePaymobWebhook(body, receivedHmac) {
   }
 
   await payment.save();
+
+  if (payment.status === 'HELD') {
+    const session = await mongoose.startSession();
+    try {
+      await session.withTransaction(async () => {
+        const contract = await Contract.findById(payment.contractId).session(session);
+        if (!contract) throw new AppError('Contract not found', 404);
+
+        if (contract.status === 'AWAITING_PAYMENT') {
+          if (!contract.clientApproval?.approved || !contract.freelancerApproval?.approved) {
+            throw new AppError('Contract approvals are incomplete', 400);
+          }
+
+          const project = await Project.findById(contract.projectId).session(session);
+          if (!project) throw new AppError('Project not found', 404);
+
+          const startDate = new Date();
+          contract.status = 'ACTIVE';
+          contract.startDate = startDate;
+          contract.deadline = new Date(startDate.getTime() + contract.durationDays * 24 * 60 * 60 * 1000);
+          project.status = 'IN_PROGRESS';
+
+          await contract.save({ session });
+          await project.save({ session });
+        }
+      });
+    } finally {
+      await session.endSession();
+    }
+  }
+
   return payment;
 }
 
 export async function getPayment(id, userId) {
   const payment = await Payment.findById(id).lean();
   if (!payment) return null;
-  if (
-    String(payment.clientId) !== String(userId)
-    && String(payment.freelancerId) !== String(userId)
-  ) {
+  if (String(payment.clientId) !== String(userId) && String(payment.freelancerId) !== String(userId)) {
     throw new AppError('You cannot view this payment', 403);
   }
   return payment;
@@ -326,76 +427,23 @@ export async function getPayment(id, userId) {
 export async function getContractPayment(contractId, userId) {
   const payment = await Payment.findOne({ contractId }).lean();
   if (!payment) return null;
-  if (
-    String(payment.clientId) !== String(userId)
-    && String(payment.freelancerId) !== String(userId)
-  ) {
+  if (String(payment.clientId) !== String(userId) && String(payment.freelancerId) !== String(userId)) {
     throw new AppError('You cannot view this payment', 403);
   }
   return payment;
 }
 
+export async function getMyPayments(userId) {
+  return Payment.find({ clientId: userId }).sort({ createdAt: -1 }).lean();
+}
+
 export async function releasePayment(id, clientId) {
   const session = await mongoose.startSession();
   let releasedPayment;
-
   try {
     await session.withTransaction(async () => {
-      const payment = await Payment.findById(id).session(session);
-      if (!payment) throw new AppError('Payment not found', 404);
-      if (String(payment.clientId) !== String(clientId)) {
-        throw new AppError('Only the client can release payment', 403);
-      }
-
-      if (payment.status === 'RELEASED') {
-        releasedPayment = payment;
-        return;
-      }
-      if (payment.status !== 'HELD') {
-        throw new AppError('Only held payments can be released', 400);
-      }
-
-      const contract = await Contract.findById(payment.contractId).session(session);
-      if (!contract) throw new AppError('Contract not found', 404);
-      if (contract.status !== 'SUBMITTED') {
-        throw new AppError('Work must be submitted before payment can be released', 400);
-      }
-
-      const approvedDelivery = await Delivery.findOne({
-        contractId: contract._id,
-        status: 'APPROVED',
-      }).sort({ version: -1 }).session(session);
-
-      if (!approvedDelivery) {
-        throw new AppError('The client must approve the latest delivery before releasing payment', 400);
-      }
-
-      const existingCredit = await WalletTransaction.findOne({
-        paymentId: payment._id,
-        reason: 'PAYMENT_RELEASE',
-      }).session(session);
-
-      if (!existingCredit) {
-        await WalletTransaction.create([{
-          userId: payment.freelancerId,
-          type: 'CREDIT',
-          amount: contract.freelancerAmount,
-          reason: 'PAYMENT_RELEASE',
-          paymentId: payment._id,
-          contractId: payment.contractId,
-        }], { session });
-      }
-
-      payment.status = 'RELEASED';
-      payment.statusHistory.push({ status: 'RELEASED' });
-      await payment.save({ session });
-
-      contract.status = 'COMPLETED';
-      await contract.save({ session });
-      await Project.findByIdAndUpdate(contract.projectId, { status: 'COMPLETED' }, { session });
-      releasedPayment = payment;
+      releasedPayment = await releasePaymentInSession(id, clientId, session);
     });
-
     return releasedPayment;
   } catch (error) {
     if (error?.code === 11000) {
